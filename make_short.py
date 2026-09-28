@@ -154,14 +154,32 @@ def analyze(path, lang, api_key, model):
         except Exception as e:  # noqa: BLE001
             last = e
             msg = str(e)
-            if ("404" in msg or "NOT_FOUND" in msg
-                    or "503" in msg or "UNAVAILABLE" in msg):
-                print("Model %s masroof ya dastiyab nahi, agla try kar raha hoon..."
-                      % m, flush=True)
+            if any(x in msg for x in ("503", "UNAVAILABLE", "500", "INTERNAL",
+                                      "429", "RESOURCE_EXHAUSTED", "overloaded")):
+                print("Model %s masroof, agla try kar raha hoon..." % m, flush=True)
+                continue
+            if "404" in msg or "NOT_FOUND" in msg:
+                print("Model %s dastiyab nahi, agla try kar raha hoon..." % m,
+                      flush=True)
                 continue
             raise
+    if resp is None and last is not None and (
+            "404" in str(last) or "NOT_FOUND" in str(last)):
+        # Ho sakta hai models ke naam badal gaye hon — available models
+        # khud dhoond kar koi flash model try karo.
+        try:
+            avail = [m.name for m in client.models.list()]
+            flashes = [n for n in avail if "flash" in n.lower()]
+            pick = flashes[0] if flashes else (avail[0] if avail else None)
+            if pick:
+                print("Khud model dhoonda: %s" % pick, flush=True)
+                resp = client.models.generate_content(model=pick, contents=[up, prompt])
+        except Exception as e2:  # noqa: BLE001
+            last = e2
     if resp is None:
-        raise last
+        raise RuntimeError(
+            "AI se jawab nahi mila. Tried models: %s. Last error: %s"
+            % (", ".join(models), str(last)[:600]))
     try:
         client.files.delete(name=up.name)
     except Exception:  # noqa: BLE001

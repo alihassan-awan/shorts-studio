@@ -60,9 +60,23 @@ if st.button("✨ Reel Banao", type="primary"):
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
             tmp.write(uploaded.getbuffer())
             in_path = tmp.name
-        with st.spinner("AI video dekh rahi hai..."):
-            desc, hook = make_short.analyze(in_path, lang, key,
-                                            make_short.DEFAULT_MODEL)
+        try:
+            with st.spinner("AI video dekh rahi hai..."):
+                desc, hook = make_short.analyze(in_path, lang, key,
+                                                make_short.DEFAULT_MODEL)
+        except Exception as e:  # noqa: BLE001
+            errmsg = str(e) or repr(e)
+            st.error("❌ AI se jawab nahi mila.")
+            low = errmsg.lower()
+            if ("api key not valid" in low or "api_key_invalid" in low
+                    or "permission_denied" in low):
+                st.warning("Lagta hai API key ka masla hai: key ghalat, expire ya "
+                           "block ho sakti hai. aistudio.google.com par nayi key "
+                           "banao aur Streamlit ki Settings → Secrets mein update "
+                           "karke dobara try karo.")
+            with st.expander("Asal error — is ka screenshot/text mujhe bhejo"):
+                st.code(errmsg[:3000])
+            st.stop()
         with st.spinner("Reel render ho rahi hai..."):
             out = tempfile.mktemp(prefix="reel_", suffix=".mp4")
             make_short.render(in_path, hook, watermark.strip(), out)

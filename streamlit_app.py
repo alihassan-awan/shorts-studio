@@ -74,6 +74,15 @@ if st.button("✨ Reel Banao", type="primary"):
                            "block ho sakti hai. aistudio.google.com par nayi key "
                            "banao aur Streamlit ki Settings → Secrets mein update "
                            "karke dobara try karo.")
+            elif ("429" in low or "too_many_requests" in low
+                    or "resource_exhausted" in low or "rate limit" in low):
+                st.warning("Free daily limit mukammal ho gayi hai. Kuch der ruk kar "
+                           "dobara try karo — limit thodi der mein ya kal reset ho "
+                           "jayegi.")
+            elif ("503" in low or "high demand" in low or "overloaded" in low
+                    or "unavailable" in low):
+                st.warning("AI model par is waqt bohat load hai. 2-3 minute ruk kar "
+                           "dobara try karo.")
             with st.expander("Asal error — is ka screenshot/text mujhe bhejo"):
                 st.code(errmsg[:3000])
             st.stop()

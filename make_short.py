@@ -58,9 +58,8 @@ def ffmpeg_bin():
         return imageio_ffmpeg.get_ffmpeg_exe()
     except ImportError:
         raise RuntimeError("ffmpeg nahi mila (packages.txt mein ffmpeg add karo).")
-DEFAULT_MODEL = "gemini-3.8-flash"
-MODEL_CANDIDATES = ["gemini-3.8-flash", "gemini-flash-latest", "gemini-3.5-flash",
-                    "gemini-2.5-flash-lite"]
+DEFAULT_MODEL = "gemini-3.5-flash-lite"
+MODEL_CANDIDATES = ["gemini-3.5-flash-lite", "gemini-3.8-flash", "gemini-3.5-flash"]
 
 LANG_LABELS = {
     "roman_urdu": "Roman Urdu — Urdu written in the Latin/English alphabet, "
@@ -187,25 +186,32 @@ def analyze(path, lang, api_key, model):
     models = [model] + [m for m in MODEL_CANDIDATES if m != model]
     text, last = None, None
     for m in models:
-        # Pehle Interactions API (Google ka recommended tareeqa)
+        # Interactions API (Google ka recommended tareeqa) — har model par
+        # sirf 1 call taake free quota zaya na ho.
         try:
             text = _interaction_text(client, m, up.uri, mime, prompt)
-            print("Model used (interactions): %s" % m, flush=True)
+            print("Model used: %s" % m, flush=True)
             break
         except Exception as e:  # noqa: BLE001
             last = e
-            print("interactions fail [%s]: %s" % (m, str(e)[:300]), flush=True)
-        # Phir purana generateContent tareeqa
-        try:
-            resp = client.models.generate_content(model=m, contents=[up, prompt])
-            text = (resp.text or "").strip()
-            if not text:
-                raise RuntimeError("generateContent ne khaali jawab diya")
-            print("Model used (generate_content): %s" % m, flush=True)
-            break
-        except Exception as e:  # noqa: BLE001
-            last = e
-            print("generate_content fail [%s]: %s" % (m, str(e)[:300]), flush=True)
+            msg = str(e)
+            print("fail [%s]: %s" % (m, msg[:300]), flush=True)
+            if ("400" in msg or "404" in msg or "NOT_FOUND" in msg
+                    or "INVALID_ARGUMENT" in msg):
+                # Ho sakta hai input/method ka masla ho — purana tareeqa try karo
+                try:
+                    resp = client.models.generate_content(model=m, contents=[up, prompt])
+                    text = (resp.text or "").strip()
+                    if not text:
+                        raise RuntimeError("generateContent ne khaali jawab diya")
+                    print("Model used (generate_content): %s" % m, flush=True)
+                    break
+                except Exception as e2:  # noqa: BLE001
+                    last = e2
+                    print("generate_content fail [%s]: %s" % (m, str(e2)[:300]),
+                          flush=True)
+            # 503/429 (load ya quota) par foran agla model — doosra tareeqa
+            # try karna quota zaya karega.
             continue
     if text is None:
         # Aakhri koshish: available models khud dhoond kar ek flash model try karo

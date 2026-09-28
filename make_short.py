@@ -59,7 +59,8 @@ def ffmpeg_bin():
     except ImportError:
         raise RuntimeError("ffmpeg nahi mila (packages.txt mein ffmpeg add karo).")
 DEFAULT_MODEL = "gemini-3.8-flash"
-MODEL_CANDIDATES = ["gemini-3.8-flash", "gemini-2.5-flash", "gemini-2.0-flash"]
+MODEL_CANDIDATES = ["gemini-3.8-flash", "gemini-flash-latest", "gemini-3.5-flash",
+                    "gemini-2.5-flash-lite"]
 
 LANG_LABELS = {
     "roman_urdu": "Roman Urdu — Urdu written in the Latin/English alphabet, "
@@ -127,6 +128,44 @@ def _sanitize_proxy_env():
             )
 
 
+def _guess_mime(path):
+    ext = os.path.splitext(path)[1].lower()
+    return {
+        ".mp4": "video/mp4",
+        ".mov": "video/mov",
+        ".webm": "video/webm",
+        ".avi": "video/avi",
+        ".3gp": "video/3gpp",
+        ".mkv": "video/mp4",
+    }.get(ext, "video/mp4")
+
+
+def _interaction_text(client, model, video_uri, mime, prompt):
+    """Interactions API (Google ka recommended tareeqa) se video analyze karo."""
+    inter = client.interactions.create(
+        model=model,
+        input=[
+            {"type": "video", "mime_type": mime, "uri": video_uri},
+            {"type": "text", "text": prompt},
+        ],
+        timeout=300.0,
+    )
+    text = (getattr(inter, "output_text", None) or "").strip()
+    if not text:
+        steps = getattr(inter, "steps", None) or []
+        for st in reversed(steps):
+            for c in (getattr(st, "content", None) or []):
+                t = (getattr(c, "text", None) or "").strip()
+                if t:
+                    text = t
+                    break
+            if text:
+                break
+    if not text:
+        raise RuntimeError("Interactions API ne khaali jawab diya (model=%s)" % model)
+    return text
+
+
 def analyze(path, lang, api_key, model):
     _sanitize_proxy_env()
     from google import genai
@@ -144,39 +183,44 @@ def analyze(path, lang, api_key, model):
         raise RuntimeError("Video AI ke liye ready nahi hui (state=%s)" % up.state.name)
 
     prompt = PROMPT.format(LANG=LANG_LABELS[lang])
+    mime = _guess_mime(path)
     models = [model] + [m for m in MODEL_CANDIDATES if m != model]
-    resp, last = None, None
+    text, last = None, None
     for m in models:
+        # Pehle Interactions API (Google ka recommended tareeqa)
         try:
-            resp = client.models.generate_content(model=m, contents=[up, prompt])
-            print("Model used: %s" % m, flush=True)
+            text = _interaction_text(client, m, up.uri, mime, prompt)
+            print("Model used (interactions): %s" % m, flush=True)
             break
         except Exception as e:  # noqa: BLE001
             last = e
-            msg = str(e)
-            if any(x in msg for x in ("503", "UNAVAILABLE", "500", "INTERNAL",
-                                      "429", "RESOURCE_EXHAUSTED", "overloaded")):
-                print("Model %s masroof, agla try kar raha hoon..." % m, flush=True)
-                continue
-            if "404" in msg or "NOT_FOUND" in msg:
-                print("Model %s dastiyab nahi, agla try kar raha hoon..." % m,
-                      flush=True)
-                continue
-            raise
-    if resp is None and last is not None and (
-            "404" in str(last) or "NOT_FOUND" in str(last)):
-        # Ho sakta hai models ke naam badal gaye hon — available models
-        # khud dhoond kar koi flash model try karo.
+            print("interactions fail [%s]: %s" % (m, str(e)[:300]), flush=True)
+        # Phir purana generateContent tareeqa
+        try:
+            resp = client.models.generate_content(model=m, contents=[up, prompt])
+            text = (resp.text or "").strip()
+            if not text:
+                raise RuntimeError("generateContent ne khaali jawab diya")
+            print("Model used (generate_content): %s" % m, flush=True)
+            break
+        except Exception as e:  # noqa: BLE001
+            last = e
+            print("generate_content fail [%s]: %s" % (m, str(e)[:300]), flush=True)
+            continue
+    if text is None:
+        # Aakhri koshish: available models khud dhoond kar ek flash model try karo
         try:
             avail = [m.name for m in client.models.list()]
             flashes = [n for n in avail if "flash" in n.lower()]
             pick = flashes[0] if flashes else (avail[0] if avail else None)
             if pick:
                 print("Khud model dhoonda: %s" % pick, flush=True)
-                resp = client.models.generate_content(model=pick, contents=[up, prompt])
-        except Exception as e2:  # noqa: BLE001
-            last = e2
-    if resp is None:
+                text = _interaction_text(client, pick, up.uri, mime, prompt)
+                models.append(pick)
+        except Exception as e:  # noqa: BLE001
+            last = e
+            print("dynamic pick fail: %s" % str(e)[:300], flush=True)
+    if text is None:
         raise RuntimeError(
             "AI se jawab nahi mila. Tried models: %s. Last error: %s"
             % (", ".join(models), str(last)[:600]))
@@ -184,8 +228,6 @@ def analyze(path, lang, api_key, model):
         client.files.delete(name=up.name)
     except Exception:  # noqa: BLE001
         pass
-
-    text = (resp.text or "").strip()
     if text.startswith("```"):
         text = text.strip().strip("`").strip()
         if text[:4].lower() == "json":
